@@ -1,0 +1,457 @@
+#!/bin/bash
+#
+# dockstart - Automatically restore Docker containers with restart policies
+#
+# This script scans all Docker containers and starts those with restart policies
+# set to "always" or "unless-stopped". It's designed to be run at system boot
+# or WSL startup to restore containers that should be running.
+#
+# Version: 1.0.0
+
+# Colors for output
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m' # No Color
+
+# Version information
+VERSION="1.0.0"
+
+# Default configuration
+RETRY_INTERVAL=10   # Seconds between retries
+MAX_WAIT_TIME=600   # Maximum wait time in seconds (default: 10 minutes)
+RETRY_ENABLED=false # Whether to retry if Docker is not running
+FORCE_START=false   # Whether to force start containers with restart policy
+LOG_FILE="/var/log/dockstart.log" # Default log file location
+ENABLE_LOGGING=true # Whether to write logs to file
+LOG_MAX_SIZE=1024   # Maximum log file size in KB before overwriting (default: 1MB)
+
+# Function to check and manage log file
+check_log_file() {
+    # Skip if logging is disabled
+    if [ "$ENABLE_LOGGING" = false ]; then
+        return
+    fi
+
+    # Create log directory if it doesn't exist
+    local log_dir
+    log_dir=$(dirname "$LOG_FILE")
+    if [ ! -d "$log_dir" ]; then
+        mkdir -p "$log_dir" 2>/dev/null || ENABLE_LOGGING=false
+        return
+    fi
+
+    # Check if log file exists and its size
+    if [ -f "$LOG_FILE" ]; then
+        local log_size
+        log_size=$(du -k "$LOG_FILE" 2>/dev/null | cut -f1)
+
+        # If log file size exceeds the maximum, overwrite it
+        if [ -n "$log_size" ] && [ "$log_size" -gt "$LOG_MAX_SIZE" ]; then
+            echo "Log file size ($log_size KB) exceeds maximum ($LOG_MAX_SIZE KB), overwriting..."
+            echo "[$(date "+%Y-%m-%d %H:%M:%S")] New log file created (previous log was $log_size KB)" > "$LOG_FILE" 2>/dev/null || ENABLE_LOGGING=false
+        fi
+    else
+        # Create new log file
+        touch "$LOG_FILE" 2>/dev/null || ENABLE_LOGGING=false
+    fi
+}
+
+# Function to log messages
+log_message() {
+    local timestamp
+    timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+    local message="[$timestamp] $1"
+
+    # Always print to stdout
+    echo "$message"
+
+    # Write to log file if enabled
+    if [ "$ENABLE_LOGGING" = true ]; then
+        # Try to write to log file
+        echo "$message" >> "$LOG_FILE" 2>/dev/null || ENABLE_LOGGING=false
+
+        # If we couldn't write to the log file, try a fallback location
+        if [ "$ENABLE_LOGGING" = false ] && [ "$LOG_FILE" = "/var/log/dockstart.log" ]; then
+            LOG_FILE="$HOME/.dockstart.log"
+            ENABLE_LOGGING=true
+            touch "$LOG_FILE" 2>/dev/null
+            echo "$message" >> "$LOG_FILE" 2>/dev/null || ENABLE_LOGGING=false
+        fi
+
+        # If we still can't write to a log file, print a warning
+        if [ "$ENABLE_LOGGING" = false ]; then
+            echo "Warning: Could not write to log file. Logging disabled."
+        fi
+    fi
+}
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --retry)
+            RETRY_ENABLED=true
+            shift
+            ;;
+        --retry-interval)
+            RETRY_INTERVAL="$2"
+            shift 2
+            ;;
+        --max-wait)
+            MAX_WAIT_TIME="$2"
+            shift 2
+            ;;
+        --force)
+            FORCE_START=true
+            shift
+            ;;
+        --log-file)
+            LOG_FILE="$2"
+            shift 2
+            ;;
+        --no-log)
+            ENABLE_LOGGING=false
+            shift
+            ;;
+        --log-max-size)
+            LOG_MAX_SIZE="$2"
+            shift 2
+            ;;
+        --version|-v)
+            echo "dockstart version $VERSION"
+            exit 0
+            ;;
+        --help)
+            echo "Usage: dockstart [OPTIONS]"
+            echo
+            echo "Options:"
+            echo "  --retry              Enable retry mode for WSL boot (default: false)"
+            echo "  --retry-interval N   Seconds between retries (default: 10)"
+            echo "  --max-wait N         Maximum wait time in seconds (default: 600)"
+            echo "  --force              Force start all containers with restart policy, ignoring previous state"
+            echo "  --log-file PATH      Path to log file (default: /var/log/dockstart.log or ~/.dockstart.log)"
+            echo "  --no-log             Disable logging to file"
+            echo "  --log-max-size N     Maximum log file size in KB before overwriting (default: 1024)"
+            echo "  --version, -v        Show version information"
+            echo "  --help               Show this help message"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
+# Check log file at startup
+check_log_file
+
+# Print header
+echo -e "${BOLD}${BLUE}=== Docker Container Auto-Restore v${VERSION} ===${NC}"
+log_message "Starting dockstart v${VERSION}"
+
+# Function to check if docker command exists
+check_docker_command() {
+    if command -v docker >/dev/null 2>&1; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to check if Docker service is running
+check_docker_service() {
+    if docker info >/dev/null 2>&1; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Initialize variables
+DOCKER_COMMAND_AVAILABLE=false
+DOCKER_SERVICE_RUNNING=false
+retry_count=0
+start_time=$(date +%s)
+
+# Check if Docker command is available
+if check_docker_command; then
+    DOCKER_COMMAND_AVAILABLE=true
+    echo -e "${GREEN}✓${NC} Docker command is available."
+    log_message "Docker command is available"
+else
+    echo -e "${YELLOW}!${NC} Docker command not found initially."
+    log_message "Docker command not found initially"
+fi
+
+# Check if Docker service is running
+if check_docker_service; then
+    DOCKER_SERVICE_RUNNING=true
+    echo -e "${GREEN}✓${NC} Docker service is running."
+    log_message "Docker service is running"
+else
+    echo -e "${YELLOW}!${NC} Docker service is not running initially."
+    log_message "Docker service is not running initially"
+fi
+
+# Check if we need to wait for Docker to become available
+if [ "$DOCKER_COMMAND_AVAILABLE" = false ] || [ "$DOCKER_SERVICE_RUNNING" = false ]; then
+    # If retry is enabled, wait for Docker to become available
+    if [ "$RETRY_ENABLED" = true ]; then
+        echo -e "${YELLOW}!${NC} Waiting for Docker to become available..."
+        log_message "Waiting for Docker to become available..."
+
+        # Keep trying until both Docker command and service are available, or we time out
+        while [ "$DOCKER_COMMAND_AVAILABLE" = false ] || [ "$DOCKER_SERVICE_RUNNING" = false ]; do
+            current_time=$(date +%s)
+            elapsed=$((current_time - start_time))
+
+            # Check if we've exceeded the maximum wait time
+            if [ $elapsed -ge $MAX_WAIT_TIME ]; then
+                echo -e "${RED}✗${NC} Timed out after ${elapsed}s waiting for Docker."
+                log_message "ERROR: Timed out after ${elapsed}s waiting for Docker."
+                exit 1
+            fi
+
+            retry_count=$((retry_count + 1))
+
+            # Check Docker command availability
+            if [ "$DOCKER_COMMAND_AVAILABLE" = false ] && check_docker_command; then
+                DOCKER_COMMAND_AVAILABLE=true
+                echo -e "${GREEN}✓${NC} Docker command is now available."
+                log_message "Docker command is now available"
+            fi
+
+            # Only check service if command is available
+            if [ "$DOCKER_COMMAND_AVAILABLE" = true ] && [ "$DOCKER_SERVICE_RUNNING" = false ] && check_docker_service; then
+                DOCKER_SERVICE_RUNNING=true
+                echo -e "${GREEN}✓${NC} Docker service is now running."
+                log_message "Docker service is now running"
+            fi
+
+            # If both are now available, break the loop
+            if [ "$DOCKER_COMMAND_AVAILABLE" = true ] && [ "$DOCKER_SERVICE_RUNNING" = true ]; then
+                break
+            fi
+
+            # Status message for retry
+            echo -e "${CYAN}▶${NC} Retry ${retry_count} - Waiting for Docker (${elapsed}s elapsed, max ${MAX_WAIT_TIME}s)..."
+            if [ "$DOCKER_COMMAND_AVAILABLE" = false ]; then
+                echo -e "   ${DIM}Docker command not yet available${NC}"
+            elif [ "$DOCKER_SERVICE_RUNNING" = false ]; then
+                echo -e "   ${DIM}Docker service not yet running${NC}"
+            fi
+            log_message "Retry ${retry_count} - Waiting for Docker (${elapsed}s elapsed, max ${MAX_WAIT_TIME}s)"
+
+            sleep $RETRY_INTERVAL
+        done
+
+        # Docker is now available and running
+        elapsed=$(($(date +%s) - start_time))
+        echo -e "${GREEN}✓${NC} Docker is fully operational after ${elapsed}s and ${retry_count} retries."
+        log_message "Docker is fully operational after ${elapsed}s and ${retry_count} retries"
+    else
+        # If retry is not enabled, exit with an error
+        if [ "$DOCKER_COMMAND_AVAILABLE" = false ]; then
+            echo -e "${RED}✗${NC} Docker command not found. Please install Docker first."
+            echo -e "${YELLOW}!${NC} Tip: Use '--retry' option when running at WSL boot to wait for Docker."
+            log_message "ERROR: Docker command not found. Exiting."
+            exit 1
+        elif [ "$DOCKER_SERVICE_RUNNING" = false ]; then
+            echo -e "${RED}✗${NC} Docker service is not running. Please start Docker first."
+            echo -e "${YELLOW}!${NC} Tip: Use '--retry' option when running at WSL boot to wait for Docker."
+            log_message "ERROR: Docker service is not running. Exiting."
+            exit 1
+        fi
+    fi
+fi
+
+# Check if jq is installed
+check_jq_command() {
+    if command -v jq >/dev/null 2>&1; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Check if jq is available
+JQ_AVAILABLE=false
+if check_jq_command; then
+    JQ_AVAILABLE=true
+    echo -e "${GREEN}✓${NC} jq command is available."
+    log_message "jq command is available"
+else
+    echo -e "${YELLOW}!${NC} jq command not found initially."
+    log_message "jq command not found initially"
+
+    # If retry is enabled, wait for jq to become available
+    if [ "$RETRY_ENABLED" = true ]; then
+        echo -e "${YELLOW}!${NC} Waiting for jq to become available..."
+        log_message "Waiting for jq to become available..."
+
+        jq_retry_count=0
+        jq_start_time=$(date +%s)
+
+        # Keep trying until jq is available or we time out
+        while ! check_jq_command; do
+            current_time=$(date +%s)
+            elapsed=$((current_time - jq_start_time))
+
+            # Check if we've exceeded the maximum wait time
+            if [ $elapsed -ge $MAX_WAIT_TIME ]; then
+                echo -e "${RED}✗${NC} Timed out after ${elapsed}s waiting for jq."
+                log_message "ERROR: Timed out after ${elapsed}s waiting for jq. Exiting."
+                exit 1
+            fi
+
+            jq_retry_count=$((jq_retry_count + 1))
+            echo -e "${CYAN}▶${NC} Retry ${jq_retry_count} - Waiting for jq (${elapsed}s elapsed, max ${MAX_WAIT_TIME}s)..."
+            log_message "Retry ${jq_retry_count} - Waiting for jq (${elapsed}s elapsed, max ${MAX_WAIT_TIME}s)"
+            sleep $RETRY_INTERVAL
+        done
+
+        # jq is now available
+        elapsed=$(($(date +%s) - jq_start_time))
+        echo -e "${GREEN}✓${NC} jq is now available after ${elapsed}s and ${jq_retry_count} retries."
+        log_message "jq is now available after ${elapsed}s and ${jq_retry_count} retries"
+        JQ_AVAILABLE=true
+    else
+        # If jq is not available and retry is not enabled, exit
+        echo -e "${RED}✗${NC} jq is not installed. Please install jq to use this script."
+        echo -e "${YELLOW}!${NC} Tip: Use '--retry' option when running at WSL boot to wait for jq."
+        log_message "ERROR: jq is not installed. Exiting."
+        exit 1
+    fi
+fi
+
+# Get all containers
+echo -e "${CYAN}▶${NC} Scanning for Docker containers..."
+log_message "Scanning for Docker containers"
+CONTAINERS=$(docker ps -a --format '{{.Names}}')
+
+if [ -z "$CONTAINERS" ]; then
+    echo -e "${YELLOW}!${NC} No Docker containers found on this system."
+    log_message "No Docker containers found on this system."
+    exit 0
+fi
+
+# Initialize counters
+STARTED=0
+RUNNING=0
+SKIPPED=0
+FAILED=0
+
+echo -e "${BOLD}${BLUE}Container Status:${NC}"
+echo "----------------------------------------"
+
+# Process each container
+for CONTAINER in $CONTAINERS; do
+    # Get restart policy
+    POLICY=$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$CONTAINER")
+
+    # Check if running
+    IS_RUNNING=$(docker inspect --format '{{.State.Running}}' "$CONTAINER")
+
+    # Get exit code if container is not running
+    EXIT_CODE=""
+    if [[ "$IS_RUNNING" != "true" ]]; then
+        EXIT_CODE=$(docker inspect --format '{{.State.ExitCode}}' "$CONTAINER" 2>/dev/null || echo "unknown")
+    fi
+
+    # Process based on policy
+    if [[ "$POLICY" == "always" || "$POLICY" == "unless-stopped" ]]; then
+        # Determine if we should start this container
+        START_CONTAINER=false
+
+        if [[ "$IS_RUNNING" != "true" ]]; then
+            if [[ "$POLICY" == "always" ]]; then
+                # Always restart containers with "always" policy
+                START_CONTAINER=true
+            elif [[ "$POLICY" == "unless-stopped" && "$FORCE_START" == "true" ]]; then
+                # Force start "unless-stopped" containers if --force is used
+                START_CONTAINER=true
+            elif [[ "$POLICY" == "unless-stopped" && "$EXIT_CODE" != "0" ]]; then
+                # Start "unless-stopped" containers that crashed (non-zero exit code)
+                START_CONTAINER=true
+            fi
+        fi
+
+        if [[ "$IS_RUNNING" == "true" ]]; then
+            echo -e "${GREEN}●${NC} Container '$CONTAINER' is already running (policy: $POLICY)"
+            log_message "Container '$CONTAINER' is already running (policy: $POLICY)"
+            RUNNING=$((RUNNING+1))
+        elif [[ "$START_CONTAINER" == "true" ]]; then
+            if [[ "$FORCE_START" == "true" ]]; then
+                echo -e "${CYAN}▶${NC} Force starting container '$CONTAINER' (policy: $POLICY)..."
+                log_message "Force starting container '$CONTAINER' (policy: $POLICY)"
+            else
+                echo -e "${CYAN}▶${NC} Starting container '$CONTAINER' (policy: $POLICY, exit code: $EXIT_CODE)..."
+                log_message "Starting container '$CONTAINER' (policy: $POLICY, exit code: $EXIT_CODE)"
+            fi
+
+            if docker start "$CONTAINER" >/dev/null; then
+                echo -e "${GREEN}✓${NC} Successfully started container '$CONTAINER'"
+                log_message "Successfully started container '$CONTAINER'"
+                STARTED=$((STARTED+1))
+            else
+                echo -e "${RED}✗${NC} Failed to start container '$CONTAINER'"
+                log_message "ERROR: Failed to start container '$CONTAINER'"
+                FAILED=$((FAILED+1))
+            fi
+        else
+            echo -e "${YELLOW}○${NC} Not starting container '$CONTAINER' (policy: $POLICY, exit code: $EXIT_CODE)"
+            echo -e "   ${DIM}Use --force to start this container regardless of previous state${NC}"
+            log_message "Not starting container '$CONTAINER' (policy: $POLICY, exit code: $EXIT_CODE)"
+            SKIPPED=$((SKIPPED+1))
+        fi
+    else
+        echo -e "${YELLOW}○${NC} Skipping container '$CONTAINER' (policy: $POLICY)"
+        log_message "Skipping container '$CONTAINER' (policy: $POLICY)"
+        SKIPPED=$((SKIPPED+1))
+    fi
+
+    # Add a small delay to ensure output is flushed
+    sleep 0.1
+done
+
+echo "----------------------------------------"
+echo -e "${BOLD}${BLUE}=== Summary ===${NC}"
+echo -e "${GREEN}✓${NC} ${BOLD}Started:${NC}     $STARTED containers"
+echo -e "${GREEN}●${NC} ${BOLD}Running:${NC}     $RUNNING containers"
+echo -e "${YELLOW}○${NC} ${BOLD}Skipped:${NC}     $SKIPPED containers"
+if [ $FAILED -gt 0 ]; then
+    echo -e "${RED}✗${NC} ${BOLD}Failed:${NC}      $FAILED containers"
+fi
+
+# Log summary
+log_message "Summary: Started: $STARTED, Running: $RUNNING, Skipped: $SKIPPED, Failed: $FAILED"
+
+# Print warning if no eligible containers were found or started
+if [ $STARTED -eq 0 ] && [ $RUNNING -eq 0 ]; then
+    echo -e "${YELLOW}!${NC} No containers with restart policy 'always' or 'unless-stopped' were found or started."
+    log_message "Warning: No containers with restart policy 'always' or 'unless-stopped' were found or started."
+fi
+
+# Log completion
+log_message "Dockstart completed successfully"
+
+# Print log file location if logging is enabled
+if [ "$ENABLE_LOGGING" = true ]; then
+    echo -e "${CYAN}▶${NC} Logs written to: $LOG_FILE"
+
+    # Get log file size in KB if it exists
+    if [ -f "$LOG_FILE" ]; then
+        log_size=$(du -k "$LOG_FILE" 2>/dev/null | cut -f1)
+        if [ -n "$log_size" ]; then
+            echo -e "   ${DIM}Current log size: ${log_size} KB (max: ${LOG_MAX_SIZE} KB)${NC}"
+        fi
+    fi
+fi
+
+exit 0
