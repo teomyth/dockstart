@@ -1,9 +1,21 @@
 # Dockstart
 
-A lightweight command-line tool for Linux/WSL that automatically restores Docker containers with restart policies `always` or `unless-stopped` when the system or WSL starts.
-
 ![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
+
+A lightweight command-line tool for Linux/WSL that automatically restores Docker containers with restart policies `always` or `unless-stopped` when the system or WSL starts.
+
+## Quick Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/teomyth/dockstart/main/install.sh | sudo bash
+```
+
+Or using wget:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/teomyth/dockstart/main/install.sh | sudo bash
+```
 
 ## Overview
 
@@ -42,19 +54,7 @@ Dockstart provides a simple solution by:
 
 ## Installation
 
-### Quick Install (via curl)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/teomyth/dockstart/main/install.sh | sudo bash
-```
-
-Or using wget:
-
-```bash
-wget -qO- https://raw.githubusercontent.com/teomyth/dockstart/main/install.sh | sudo bash
-```
-
-This one-line installer will:
+The quick install commands above will:
 - Install the dockstart script to `/usr/local/bin/dockstart`
 - Automatically detect if you're using WSL2 or standard Linux
 - Configure the appropriate startup method for your environment
