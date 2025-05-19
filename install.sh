@@ -4,8 +4,6 @@
 #
 # This script installs the dockstart tool and configures it to run at system boot
 # or WSL startup, depending on the environment.
-#
-# Version: 1.0.0
 
 set -e
 

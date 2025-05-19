@@ -1,6 +1,5 @@
 # Dockstart
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 A lightweight command-line tool for Linux/WSL that automatically restores Docker containers with restart policies `always` or `unless-stopped` when the system or WSL starts.
