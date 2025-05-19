@@ -25,7 +25,7 @@ GITHUB_RAW_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/main"
 
 # Print a header
 print_header() {
-    echo -e "${BOLD}${BLUE}=== $1 ===${NC}"
+    echo -e "==> ${BLUE}$1${NC}"
 }
 
 # Check if running as root
@@ -56,7 +56,7 @@ StandardOutput=journal
 WantedBy=multi-user.target"
 
 # Print header
-print_header "Dockstart Installer"
+print_header "INSTALL"
 
 # Detect installation method
 is_piped_install=false
@@ -68,13 +68,13 @@ if [ ! -t 0 ] || [[ "$(ps -o comm= $PPID 2>/dev/null | tr -d ' ')" == *"curl"* |
                     "$(ps -o comm= $PPID 2>/dev/null | tr -d ' ')" == "bash" && ! -t 0 ]] ||
    [[ "$SCRIPT_DIR" == *"/tmp/"* ]]; then
     is_piped_install=true
-    echo -e "${CYAN}▶${NC} Source: Remote (GitHub)"
+    echo -e "+ ${CYAN}Source: Remote (GitHub)${NC}"
 else
-    echo -e "${CYAN}▶${NC} Source: Local"
+    echo -e "+ ${CYAN}Source: Local${NC}"
 fi
 
 # Install dockstart script
-echo -e "${CYAN}▶${NC} Installing to /usr/local/bin/dockstart..."
+echo -e "+ ${CYAN}Copying to /usr/local/bin/dockstart${NC}"
 
 if [ "$is_piped_install" = true ]; then
     # Install from GitHub
@@ -102,32 +102,34 @@ else
 fi
 
 chmod +x /usr/local/bin/dockstart
-echo -e "${GREEN}✓${NC} Installation successful"
+echo -e "${GREEN}Installation successful${NC}"
+
+print_header "CONFIGURE"
 
 # Check environment
 is_wsl=false
 if grep -qi microsoft /proc/version 2>/dev/null; then
     is_wsl=true
-    echo -e "${CYAN}▶${NC} Environment: WSL"
+    echo -e "+ ${CYAN}Environment: WSL${NC}"
 else
-    echo -e "${CYAN}▶${NC} Environment: Linux"
+    echo -e "+ ${CYAN}Environment: Linux${NC}"
 fi
 
 # Configure for WSL
 configure_wsl() {
-    print_header "Configuring WSL Integration"
+    # WSL configuration is handled in the main function
 
     # Required parameters for dockstart
     REQUIRED_PARAMS="--retry --force"
 
     # Check if /etc/wsl.conf exists
     if [ ! -f /etc/wsl.conf ]; then
-        echo -e "${CYAN}▶${NC} Creating new /etc/wsl.conf"
+        echo -e "+ ${CYAN}Creating new /etc/wsl.conf${NC}"
         cat > /etc/wsl.conf << EOF
 [boot]
 command = /usr/local/bin/dockstart ${REQUIRED_PARAMS}
 EOF
-        echo -e "${GREEN}✓${NC} Configuration complete"
+        echo -e "${GREEN}Configuration complete${NC}"
         return 0
     fi
 
@@ -153,11 +155,13 @@ EOF
 
                 if [ -z "$MISSING_PARAMS" ]; then
                     # All required parameters are present
-                    echo -e "${GREEN}✓${NC} Already configured correctly"
+                    echo -e "+ ${CYAN}Checking configuration${NC}"
+                    echo -e "${GREEN}Already configured correctly${NC}"
                     return 0
                 else
                     # Some parameters are missing, attempt to update automatically
-                    echo -e "${YELLOW}!${NC} Missing parameters: ${MISSING_PARAMS}"
+                    echo -e "+ ${CYAN}Checking configuration${NC}"
+                    echo -e "${YELLOW}Missing parameters: ${MISSING_PARAMS}${NC}"
 
                     # Check if command is part of a chain
                     if echo "$CURRENT_COMMAND" | grep -q "&&\|;"; then
@@ -214,7 +218,7 @@ EOF
 
 # Configure for systemd
 configure_systemd() {
-    print_header "Configuring Systemd Integration"
+    # Systemd configuration is handled in the main function
 
     # Required parameters for dockstart in systemd
     REQUIRED_PARAMS="--retry --force"
@@ -282,26 +286,30 @@ configure_systemd() {
 
 # Main installation logic
 if [ "$is_wsl" = true ]; then
+    echo -e "+ ${CYAN}Checking configuration${NC}"
     configure_wsl
     wsl_result=$?
 
     if [ $wsl_result -eq 0 ]; then
-        echo -e "${GREEN}✓${NC} WSL configuration complete"
-        echo -e "${CYAN}▶${NC} Restart WSL to apply changes: wsl --shutdown"
+        echo -e "${GREEN}Configuration complete${NC}"
     else
-        echo -e "${YELLOW}!${NC} Manual adjustment required (see above)"
+        echo -e "${YELLOW}Manual adjustment required (see above)${NC}"
     fi
 else
     # Check if systemd is available
     if command -v systemctl >/dev/null 2>&1; then
+        echo -e "+ ${CYAN}Configuring systemd service${NC}"
         configure_systemd
     else
-        echo -e "${YELLOW}!${NC} No auto-start system detected"
-        echo -e "${CYAN}▶${NC} Manual run: sudo /usr/local/bin/dockstart"
+        echo -e "${YELLOW}No auto-start system detected${NC}"
+        echo -e "+ ${CYAN}Manual run: sudo /usr/local/bin/dockstart${NC}"
     fi
 fi
 
-print_header "Installation Complete"
-echo -e "${GREEN}✓${NC} dockstart installed to /usr/local/bin/dockstart"
+print_header "SUMMARY"
+echo -e "${GREEN}dockstart installed to /usr/local/bin/dockstart${NC}"
+if [ "$is_wsl" = true ]; then
+    echo -e "${YELLOW}Restart WSL to apply changes: wsl --shutdown${NC}"
+fi
 
 exit 0
