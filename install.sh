@@ -153,12 +153,10 @@ EOF
 
                 if [ -z "$MISSING_PARAMS" ]; then
                     # All required parameters are present
-                    echo -e "+ ${CYAN}Checking configuration${NC}"
                     echo -e "${GREEN}Already configured correctly${NC}"
                     return 0
                 else
                     # Some parameters are missing, attempt to update automatically
-                    echo -e "+ ${CYAN}Checking configuration${NC}"
                     echo -e "${YELLOW}Missing parameters: ${MISSING_PARAMS}${NC}"
 
                     # Check if command is part of a chain
