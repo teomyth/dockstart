@@ -62,93 +62,72 @@ print_header "Dockstart Installer"
 is_piped_install=false
 
 # Check if script is being sourced (piped through curl/wget)
-# Method 1: Check if stdin is a terminal
-if [ ! -t 0 ]; then
+if [ ! -t 0 ] || [[ "$(ps -o comm= $PPID 2>/dev/null | tr -d ' ')" == *"curl"* ||
+                    "$(ps -o comm= $PPID 2>/dev/null | tr -d ' ')" == *"wget"* ||
+                    "$(ps -o comm= $PPID 2>/dev/null | tr -d ' ')" == "sh" ||
+                    "$(ps -o comm= $PPID 2>/dev/null | tr -d ' ')" == "bash" && ! -t 0 ]] ||
+   [[ "$SCRIPT_DIR" == *"/tmp/"* ]]; then
     is_piped_install=true
-fi
-
-# Method 2: Check if parent process is curl, wget, or similar
-parent_process=$(ps -o comm= $PPID 2>/dev/null | tr -d ' ')
-if [[ "$parent_process" == *"curl"* || "$parent_process" == *"wget"* || "$parent_process" == "sh" || "$parent_process" == "bash" ]]; then
-    # If parent is shell, it might be a pipe from curl/wget
-    if [ ! -t 0 ]; then
-        is_piped_install=true
-    fi
-fi
-
-# Method 3: Check if script was downloaded to a temporary location
-if [[ "$SCRIPT_DIR" == *"/tmp/"* ]]; then
-    is_piped_install=true
-fi
-
-if [ "$is_piped_install" = true ]; then
-    echo -e "${CYAN}▶${NC} Running through pipe or download (curl/wget)"
+    echo -e "${CYAN}▶${NC} Source: Remote (GitHub)"
 else
-    echo -e "${CYAN}▶${NC} Running in local environment"
+    echo -e "${CYAN}▶${NC} Source: Local"
 fi
 
 # Install dockstart script
-echo -e "${CYAN}▶${NC} Installing dockstart to /usr/local/bin/dockstart..."
+echo -e "${CYAN}▶${NC} Installing to /usr/local/bin/dockstart..."
 
 if [ "$is_piped_install" = true ]; then
     # Install from GitHub
-    echo -e "${CYAN}▶${NC} Downloading dockstart from GitHub..."
-
-    # Check if curl is available
     if command -v curl >/dev/null 2>&1; then
         if ! curl -fsSL "${GITHUB_RAW_URL}/bin/dockstart" -o /usr/local/bin/dockstart; then
-            echo -e "${RED}✗${NC} Failed to download dockstart from GitHub using curl"
+            echo -e "${RED}✗${NC} Download failed (curl)"
             exit 1
         fi
-    # Check if wget is available
     elif command -v wget >/dev/null 2>&1; then
         if ! wget -q "${GITHUB_RAW_URL}/bin/dockstart" -O /usr/local/bin/dockstart; then
-            echo -e "${RED}✗${NC} Failed to download dockstart from GitHub using wget"
+            echo -e "${RED}✗${NC} Download failed (wget)"
             exit 1
         fi
     else
-        echo -e "${RED}✗${NC} Neither curl nor wget is available. Please install one of them and try again."
+        echo -e "${RED}✗${NC} Neither curl nor wget is available"
         exit 1
     fi
-
-    echo -e "${GREEN}✓${NC} Successfully downloaded dockstart from GitHub"
 else
     # Install from local directory
     if [ ! -f "$SCRIPT_DIR/bin/dockstart" ]; then
-        echo -e "${RED}✗${NC} dockstart script not found at $SCRIPT_DIR/bin/dockstart"
+        echo -e "${RED}✗${NC} Script not found at $SCRIPT_DIR/bin/dockstart"
         exit 1
     fi
-    echo -e "${CYAN}▶${NC} Copying dockstart from local directory..."
     cp "$SCRIPT_DIR/bin/dockstart" /usr/local/bin/dockstart
-    echo -e "${GREEN}✓${NC} Successfully copied dockstart from local directory"
 fi
 
 chmod +x /usr/local/bin/dockstart
-echo -e "${GREEN}✓${NC} dockstart installed successfully"
+echo -e "${GREEN}✓${NC} Installation successful"
 
-# Check if we're running in WSL
+# Check environment
 is_wsl=false
 if grep -qi microsoft /proc/version 2>/dev/null; then
     is_wsl=true
-    echo -e "${CYAN}▶${NC} WSL environment detected"
+    echo -e "${CYAN}▶${NC} Environment: WSL"
+else
+    echo -e "${CYAN}▶${NC} Environment: Linux"
 fi
 
 # Configure for WSL
 configure_wsl() {
     print_header "Configuring WSL Integration"
-    echo -e "${CYAN}▶${NC} Setting up dockstart to run at WSL startup..."
 
     # Required parameters for dockstart
     REQUIRED_PARAMS="--retry --force"
 
     # Check if /etc/wsl.conf exists
     if [ ! -f /etc/wsl.conf ]; then
-        echo -e "${CYAN}▶${NC} Creating /etc/wsl.conf file"
+        echo -e "${CYAN}▶${NC} Creating new /etc/wsl.conf"
         cat > /etc/wsl.conf << EOF
 [boot]
 command = /usr/local/bin/dockstart ${REQUIRED_PARAMS}
 EOF
-        echo -e "${GREEN}✓${NC} WSL configuration complete - dockstart will run at WSL startup"
+        echo -e "${GREEN}✓${NC} Configuration complete"
         return 0
     fi
 
@@ -174,69 +153,61 @@ EOF
 
                 if [ -z "$MISSING_PARAMS" ]; then
                     # All required parameters are present
-                    echo -e "${GREEN}✓${NC} dockstart is already properly configured in /etc/wsl.conf:"
-                    echo "$CURRENT_COMMAND" | sed 's/^/  /'
-                    echo -e "${GREEN}✓${NC} No changes needed to WSL configuration"
+                    echo -e "${GREEN}✓${NC} Already configured correctly"
                     return 0
                 else
                     # Some parameters are missing, attempt to update automatically
-                    echo -e "${YELLOW}!${NC} dockstart is configured but missing required parameters in /etc/wsl.conf:"
-                    echo "$CURRENT_COMMAND" | sed 's/^/  /'
-                    echo -e "${CYAN}▶${NC} Attempting to update configuration automatically..."
+                    echo -e "${YELLOW}!${NC} Missing parameters: ${MISSING_PARAMS}"
 
-                    # Check if the command is a simple dockstart command or part of a chain
-                    if echo "$CURRENT_COMMAND" | grep -q "&&" || echo "$CURRENT_COMMAND" | grep -q "||" || echo "$CURRENT_COMMAND" | grep -q ";"; then
+                    # Check if command is part of a chain
+                    if echo "$CURRENT_COMMAND" | grep -q "&&\|;"; then
                         # Complex command, suggest manual update
-                        echo -e "${YELLOW}!${NC} Your boot command appears to be part of a command chain."
-                        echo -e "${YELLOW}!${NC} Please manually update your boot command to include:${MISSING_PARAMS}"
+                        echo -e "${YELLOW}!${NC} Manual update required for command chain"
                         echo -e "  ${CYAN}Current:${NC} $CURRENT_COMMAND"
-                        echo -e "  ${CYAN}Required parameters:${NC}${MISSING_PARAMS}"
+                        echo -e "  ${CYAN}Add:${NC}${MISSING_PARAMS}"
                         return 1
                     else
                         # Simple command, update automatically
                         NEW_COMMAND="command = /usr/local/bin/dockstart ${REQUIRED_PARAMS}"
                         sed -i "s|^command.*dockstart.*|$NEW_COMMAND|" /etc/wsl.conf
-                        echo -e "${GREEN}✓${NC} Updated dockstart command in /etc/wsl.conf:"
-                        echo "  $NEW_COMMAND"
+                        echo -e "${GREEN}✓${NC} Updated configuration"
                         return 0
                     fi
                 fi
             else
-                # dockstart not in command, check if we can append it
-                echo -e "${YELLOW}!${NC} A boot command is already configured in /etc/wsl.conf:"
-                echo "$CURRENT_COMMAND" | sed 's/^/  /'
+                # dockstart not in command, check if we can append
+                echo -e "${YELLOW}!${NC} Existing boot command found"
 
-                # Check if the command ends with a command terminator
+                # Check if command ends with semicolon
                 if echo "$CURRENT_COMMAND" | grep -qE ';\s*$'; then
-                    # Command ends with semicolon, we can append
+                    # Can append
                     NEW_COMMAND="${CURRENT_COMMAND} /usr/local/bin/dockstart ${REQUIRED_PARAMS}"
                     sed -i "s|^command.*|$NEW_COMMAND|" /etc/wsl.conf
-                    echo -e "${GREEN}✓${NC} Appended dockstart to existing command in /etc/wsl.conf:"
-                    echo "  $NEW_COMMAND"
+                    echo -e "${GREEN}✓${NC} Appended to existing command"
                     return 0
                 else
-                    # Suggest manual update with &&
-                    echo -e "${YELLOW}!${NC} Please manually add dockstart to your boot command"
-                    echo -e "  ${CYAN}Example:${NC} ${CURRENT_COMMAND} && /usr/local/bin/dockstart ${REQUIRED_PARAMS}"
+                    # Suggest manual update
+                    echo -e "${YELLOW}!${NC} Manual update required"
+                    echo -e "  ${CYAN}Add:${NC} ${CURRENT_COMMAND} && /usr/local/bin/dockstart ${REQUIRED_PARAMS}"
                     return 1
                 fi
             fi
         else
             # Add command under existing [boot] section
-            echo -e "${CYAN}▶${NC} Adding dockstart to existing [boot] section in /etc/wsl.conf"
+            echo -e "${CYAN}▶${NC} Adding to existing [boot] section"
             sed -i "/^\[boot\]/a command = /usr/local/bin/dockstart ${REQUIRED_PARAMS}" /etc/wsl.conf
-            echo -e "${GREEN}✓${NC} WSL configuration complete - dockstart will run at WSL startup"
+            echo -e "${GREEN}✓${NC} Configuration complete"
             return 0
         fi
     else
         # Add [boot] section and command
-        echo -e "${CYAN}▶${NC} Adding [boot] section to /etc/wsl.conf"
+        echo -e "${CYAN}▶${NC} Adding new [boot] section"
         cat >> /etc/wsl.conf << EOF
 
 [boot]
 command = /usr/local/bin/dockstart ${REQUIRED_PARAMS}
 EOF
-        echo -e "${GREEN}✓${NC} WSL configuration complete - dockstart will run at WSL startup"
+        echo -e "${GREEN}✓${NC} Configuration complete"
         return 0
     fi
 }
@@ -244,14 +215,13 @@ EOF
 # Configure for systemd
 configure_systemd() {
     print_header "Configuring Systemd Integration"
-    echo -e "${CYAN}▶${NC} Setting up dockstart as a systemd service..."
 
     # Required parameters for dockstart in systemd
     REQUIRED_PARAMS="--retry --force"
 
     # Check if service file already exists
     if [ -f /etc/systemd/system/dockstart.service ]; then
-        echo -e "${CYAN}▶${NC} Checking existing dockstart.service configuration..."
+        echo -e "${CYAN}▶${NC} Checking existing service"
 
         # Check if the service file has the required parameters
         if grep -q "ExecStart=/usr/local/bin/dockstart" /etc/systemd/system/dockstart.service; then
@@ -263,55 +233,47 @@ configure_systemd() {
             done
 
             if [ -z "$MISSING_PARAMS" ]; then
-                echo -e "${GREEN}✓${NC} dockstart.service is already properly configured"
+                echo -e "${GREEN}✓${NC} Service already configured correctly"
             else
-                echo -e "${YELLOW}!${NC} dockstart.service is missing required parameters:${MISSING_PARAMS}"
-                echo -e "${CYAN}▶${NC} Updating service file with required parameters..."
+                echo -e "${YELLOW}!${NC} Missing parameters: ${MISSING_PARAMS}"
 
                 # Update the ExecStart line
                 sed -i "s|ExecStart=/usr/local/bin/dockstart.*|ExecStart=/usr/local/bin/dockstart ${REQUIRED_PARAMS}|" /etc/systemd/system/dockstart.service
-
-                echo -e "${GREEN}✓${NC} Service file updated with required parameters"
-                echo -e "${CYAN}▶${NC} Reloading systemd daemon..."
+                echo -e "${GREEN}✓${NC} Service updated"
                 systemctl daemon-reload
-                echo -e "${GREEN}✓${NC} systemd daemon reloaded"
             fi
         else
-            echo -e "${YELLOW}!${NC} Existing service file does not appear to be for dockstart"
-            echo -e "${CYAN}▶${NC} Creating new dockstart.service file..."
+            echo -e "${YELLOW}!${NC} Service exists but not for dockstart"
             echo "$SYSTEMD_SERVICE_CONTENT" > /etc/systemd/system/dockstart.service
-            echo -e "${GREEN}✓${NC} Service file installed to /etc/systemd/system/dockstart.service"
-            echo -e "${CYAN}▶${NC} Reloading systemd daemon..."
+            echo -e "${GREEN}✓${NC} Service created"
             systemctl daemon-reload
-            echo -e "${GREEN}✓${NC} systemd daemon reloaded"
         fi
     else
         # Create service file
-        echo -e "${CYAN}▶${NC} Creating dockstart.service file..."
+        echo -e "${CYAN}▶${NC} Creating service file"
         echo "$SYSTEMD_SERVICE_CONTENT" > /etc/systemd/system/dockstart.service
-        echo -e "${GREEN}✓${NC} Service file installed to /etc/systemd/system/dockstart.service"
+        echo -e "${GREEN}✓${NC} Service created"
+        systemctl daemon-reload
     fi
 
-    # Check if service is enabled
+    # Enable service
     if systemctl is-enabled dockstart.service &>/dev/null; then
-        echo -e "${GREEN}✓${NC} dockstart.service is already enabled"
+        echo -e "${GREEN}✓${NC} Service already enabled"
     else
-        echo -e "${CYAN}▶${NC} Enabling dockstart.service to start at boot..."
         systemctl enable dockstart.service
-        echo -e "${GREEN}✓${NC} dockstart.service enabled - it will start automatically at boot"
+        echo -e "${GREEN}✓${NC} Service enabled for boot"
     fi
 
-    # Check if service is running
+    # Check if running
     if systemctl is-active dockstart.service &>/dev/null; then
-        echo -e "${GREEN}✓${NC} dockstart.service is already running"
+        echo -e "${GREEN}✓${NC} Service already running"
     else
-        # Offer to start the service now
-        read -p "Do you want to start dockstart service now? (y/n): " -n 1 -r
+        # Offer to start
+        read -p "Start service now? (y/n): " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            echo -e "${CYAN}▶${NC} Starting dockstart service..."
             systemctl start dockstart.service
-            echo -e "${GREEN}✓${NC} dockstart service started"
+            echo -e "${GREEN}✓${NC} Service started"
         fi
     fi
 
@@ -325,27 +287,21 @@ if [ "$is_wsl" = true ]; then
 
     if [ $wsl_result -eq 0 ]; then
         echo -e "${GREEN}✓${NC} WSL configuration complete"
-        echo -e "${CYAN}▶${NC} You'll need to restart WSL for changes to take effect"
-        echo -e "  ${CYAN}Restart command:${NC} wsl --shutdown (run from PowerShell)"
+        echo -e "${CYAN}▶${NC} Restart WSL to apply changes: wsl --shutdown"
     else
-        echo -e "${YELLOW}!${NC} WSL configuration requires manual adjustment as noted above"
+        echo -e "${YELLOW}!${NC} Manual adjustment required (see above)"
     fi
 else
     # Check if systemd is available
     if command -v systemctl >/dev/null 2>&1; then
         configure_systemd
-        echo -e "${GREEN}✓${NC} systemd configuration complete"
     else
-        echo -e "${YELLOW}!${NC} Neither WSL nor systemd detected"
-        echo -e "${YELLOW}!${NC} You'll need to manually configure dockstart to run at startup"
-        echo -e "  ${CYAN}Manual run:${NC} sudo /usr/local/bin/dockstart"
+        echo -e "${YELLOW}!${NC} No auto-start system detected"
+        echo -e "${CYAN}▶${NC} Manual run: sudo /usr/local/bin/dockstart"
     fi
 fi
 
-echo
 print_header "Installation Complete"
-echo -e "${GREEN}✓${NC} dockstart is now installed at /usr/local/bin/dockstart"
-
-# Installation complete - no additional info needed
+echo -e "${GREEN}✓${NC} dockstart installed to /usr/local/bin/dockstart"
 
 exit 0
