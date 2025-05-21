@@ -46,7 +46,7 @@ ConditionPathExists=/usr/local/bin/dockstart
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/dockstart --retry --force
+ExecStart=/usr/local/bin/dockstart --retry
 RemainAfterExit=yes
 StandardOutput=journal
 
@@ -118,7 +118,7 @@ configure_wsl() {
     # WSL configuration is handled in the main function
 
     # Required parameters for dockstart
-    REQUIRED_PARAMS="--retry --force"
+    REQUIRED_PARAMS="--retry"
 
     # Check if /etc/wsl.conf exists
     if [ ! -f /etc/wsl.conf ]; then
@@ -217,7 +217,7 @@ configure_systemd() {
     # Systemd configuration is handled in the main function
 
     # Required parameters for dockstart in systemd
-    REQUIRED_PARAMS="--retry --force"
+    REQUIRED_PARAMS="--retry"
 
     # Check if service file already exists
     if [ -f /etc/systemd/system/dockstart.service ]; then

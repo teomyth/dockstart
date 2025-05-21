@@ -5,6 +5,8 @@
 # This script scans all Docker containers and starts those with restart policies
 # set to "always" or "unless-stopped". It's designed to be run at system boot
 # or WSL startup to restore containers that should be running.
+#
+# Repository: https://github.com/teomyth/dockstart
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -138,6 +140,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --log-max-size N     Maximum log file size in KB before overwriting (default: 1024)"
             echo "  --debug              Enable debug mode with verbose output"
             echo "  --help               Show this help message"
+            echo
+            echo "Repository: https://github.com/teomyth/dockstart"
             exit 0
             ;;
         *)
